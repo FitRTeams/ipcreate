@@ -20,6 +20,17 @@ if [ -z "$PUBLIC_IP" ]; then
   exit 1
 fi
 
+# 检查并终止已有的 danted 进程
+echo "检查是否存在正在运行的 danted 进程..."
+if pgrep -x "danted" > /dev/null; then
+  echo "发现运行中的 danted 进程，正在终止..."
+  systemctl stop danted
+  pkill -9 danted
+  echo "已终止所有 danted 相关进程。"
+else
+  echo "未发现运行中的 danted 进程。"
+fi
+
 # 检查并修复 dpkg 和 apt 锁问题
 echo "检查是否有占用锁的进程..."
 LOCKED_PROCESSES=$(ps aux | grep -E "apt|dpkg" | grep -v grep)
@@ -110,23 +121,8 @@ pass {
 EOF
 echo "SOCKS5 配置完成。"
 
-# 检查防火墙规则并开放 1080 端口
-echo "检查防火墙规则..."
-if command -v ufw &> /dev/null; then
-  echo "检测到 UFW 防火墙，检查 1080 端口规则..."
-  ufw allow 1080/tcp
-  ufw reload
-  echo "UFW 防火墙规则已更新，1080 端口已开放。"
-elif command -v iptables &> /dev/null; then
-  echo "检测到 iptables 防火墙，添加 1080 端口规则..."
-  iptables -C INPUT -p tcp --dport 1080 -j ACCEPT &> /dev/null || iptables -A INPUT -p tcp --dport 1080 -j ACCEPT
-  echo "iptables 防火墙规则已更新，1080 端口已开放。"
-else
-  echo "未检测到已知防火墙，跳过防火墙配置。"
-fi
-
 # 启动并启用 Dante 服务
-echo "启动 SOCKS5 服务..."
+echo "注册并启动 SOCKS5 守护进程..."
 systemctl restart danted
 systemctl enable danted
 
@@ -136,6 +132,7 @@ if systemctl status danted | grep -q "active (running)"; then
   echo "代理地址：socks5://$PUBLIC_IP:1080"
 else
   echo "SOCKS5 服务启动失败，请检查配置或日志！"
+  echo "最近的错误日志如下："
   journalctl -u danted | tail -n 10
   exit 1
 fi
