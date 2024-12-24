@@ -85,7 +85,7 @@ cat > /etc/danted.conf <<EOF
 logoutput: syslog
 
 # 监听公网 IP 和端口
-internal: $PUBLIC_IP port = 1080
+internal: 0.0.0.0 port = 1080
 external: eth0
 
 # 无需认证
