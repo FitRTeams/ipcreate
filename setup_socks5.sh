@@ -15,14 +15,24 @@ if [ -z "$PUBLIC_IP" ]; then
   exit 1
 fi
 
-# 更新系统并安装依赖
-echo "更新系统并安装必要的软件包..."
-apt update && apt upgrade -y
-apt install -y dante-server curl
+# 更新系统（仅更新必需的组件）
+echo "更新系统基础组件..."
+apt-get update -y
+apt-get install -y --no-install-recommends apt-transport-https curl > /dev/null 2>&1
+
+# 安装 dante-server
+echo "安装 Dante SOCKS5 服务..."
+apt-get install -y --no-install-recommends dante-server > /dev/null 2>&1
+
+# 检查安装是否成功
+if ! command -v danted &> /dev/null; then
+  echo "Dante 安装失败，请检查！"
+  exit 1
+fi
 
 # 绑定 IP 到网卡 eth0
 echo "绑定公网 IP 到网卡 eth0..."
-ip addr add $PUBLIC_IP/32 dev eth0
+ip addr add $PUBLIC_IP/32 dev eth0 > /dev/null 2>&1
 
 # 验证 IP 是否绑定成功
 if ip addr show eth0 | grep -q "$PUBLIC_IP"; then
@@ -62,15 +72,10 @@ pass {
 }
 EOF
 
-# 开放防火墙端口
-echo "配置防火墙，开放 1080 端口..."
-ufw allow 1080/tcp
-ufw reload
-
 # 启动并启用 Dante 服务
 echo "启动 SOCKS5 服务..."
-systemctl restart danted
-systemctl enable danted
+systemctl restart danted > /dev/null 2>&1
+systemctl enable danted > /dev/null 2>&1
 
 # 验证服务状态并输出结果
 if systemctl status danted | grep -q "active (running)"; then
