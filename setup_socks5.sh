@@ -1,12 +1,7 @@
 #!/bin/bash
 
 #============================================================
-#     Dante SOCKS5 一键安装/配置脚本 - 优化版示例
-#     1. 自动检测/录入公网 IP
-#     2. 创建 Swap 防止进程被 OOM 杀死
-#     3. 安装并配置 dante-server
-#     4. 添加 systemd OOM 优先级调低配置
-#     5. 适合 2 核 0.5G 服务器，可酌情增大 Swap
+#     Dante SOCKS5 一键安装/配置脚本 - 2G Swap 优先使用版
 #============================================================
 
 echo "=============================="
@@ -95,32 +90,60 @@ fi
 echo "必要软件安装完成。"
 
 #------------------------
-# 5. 创建并启用 Swap
+# 5. Swap 设置（2G）
+#   先检查是否已有 swap；如果有，删除并重新创建
 #------------------------
-SWAP_SIZE="1G"  # 可根据需求调整大小，比如 "1G" 或 "2G"
-if ! grep -q "swap" /etc/fstab; then
-  echo "检测到系统无或未在 fstab 中启用 Swap，开始创建 ${SWAP_SIZE} Swap ..."
-  fallocate -l $SWAP_SIZE /swapfile
-  if [ $? -ne 0 ]; then
-    echo "创建 /swapfile 失败，请检查磁盘剩余空间或权限！"
-    exit 1
-  fi
-  chmod 600 /swapfile
-  mkswap /swapfile
-  swapon /swapfile
-  if [ $? -eq 0 ]; then
-    echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
-    echo "Swap 启用成功，大小：${SWAP_SIZE}"
-  else
-    echo "启用 Swap 失败，请手动检查！"
-  fi
+SWAP_SIZE="2G"
+
+# 5.1 关闭现有所有 Swap
+echo "关闭现有的所有 Swap..."
+swapoff -a
+
+# 5.2 从 /etc/fstab 中移除任何包含 swap 的条目
+echo "从 /etc/fstab 中移除 Swap 条目..."
+sed -i '/swap/d' /etc/fstab
+
+# 5.3 删除可能存在的旧 /swapfile
+if [ -f /swapfile ]; then
+  echo "检测到已有 /swapfile，删除之..."
+  rm -f /swapfile
+fi
+
+# 5.4 创建新的 2G Swap
+echo "创建 ${SWAP_SIZE} 的新 Swap..."
+fallocate -l $SWAP_SIZE /swapfile
+if [ $? -ne 0 ]; then
+  echo "创建 /swapfile 失败，请检查磁盘剩余空间或权限！"
+  exit 1
+fi
+
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+if [ $? -ne 0 ]; then
+  echo "启用 Swap 失败，请手动检查！"
+  exit 1
+fi
+
+echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
+echo "Swap 启用成功，大小：${SWAP_SIZE}"
+
+#------------------------
+# 6. 调整 swappiness
+#   让系统更倾向于先用 Swap，再用物理内存
+#------------------------
+echo "设置 vm.swappiness=100 (更倾向于使用 Swap)..."
+sysctl -w vm.swappiness=100 >/dev/null 2>&1
+
+# 如果要开机生效，需要写入 /etc/sysctl.conf
+if grep -q "vm.swappiness" /etc/sysctl.conf; then
+  sed -i 's/^vm.swappiness=.*/vm.swappiness=100/' /etc/sysctl.conf
 else
-  echo "系统已存在 Swap 或已在 fstab 中配置，无需重复创建。"
+  echo "vm.swappiness=100" >> /etc/sysctl.conf
 fi
 
 #--------------------------------
-# 6. 可选：尝试绑定公网 IP
-#    （若 VPS 已经自动绑定, 或网卡非 eth0, 可注释掉）
+# 7. 可选：尝试绑定公网 IP
 #--------------------------------
 NETCARD="eth0"
 if ip link show "$NETCARD" &>/dev/null; then
@@ -134,7 +157,6 @@ if ip link show "$NETCARD" &>/dev/null; then
       echo "公网 IP $PUBLIC_IP 绑定成功。"
     else
       echo "绑定公网 IP 失败，请检查输入的 IP 地址或网卡名称是否正确！"
-      #exit 1
     fi
   fi
 else
@@ -142,29 +164,27 @@ else
 fi
 
 #---------------------------
-# 7. 配置 Dante SOCKS5 服务
+# 8. 配置 Dante SOCKS5 服务
 #---------------------------
 echo "配置 SOCKS5 服务..."
 cat > /etc/danted.conf <<EOF
-# 如果需要日志输出到文件，请改为 /var/log/danted.log 或 syslog
+# 关闭日志输出到文件，可改为 /var/log/danted.log 或 syslog
 logoutput: /dev/null
 
-# 监听所有地址 0.0.0.0 并使用 1080 端口
+# 监听公网 IP 和端口
 internal: 0.0.0.0 port = 1080
-external: $(ip route get 8.8.8.8 | awk '{print $5; exit}')
+external: $NETCARD
 
-# 用户认证方式，可设置 socksmethod: username, 或 none
+# 无需认证
 method: none
-# socksmethod: none
 
 # 用户权限
 user.privileged: proxy
 user.unprivileged: nobody
 
 # 限制并发连接
-# 可在此处进行一些限速/并发限制，以降低内存消耗
-maxnumberofclients: 50       # 最多允许 50 个客户端
-maxnumberofconnections: 100  # 最多允许 100 条连接
+maxnumberofclients: 50
+maxnumberofconnections: 100
 
 # 客户端连接规则
 client pass {
@@ -182,14 +202,13 @@ EOF
 echo "SOCKS5 配置完成。"
 
 #------------------------------------
-# 8. Systemd OOM 优化：调整优先级
+# 9. Systemd OOM 优化：调整优先级
 #    让 danted 更不容易被 OOM 杀死
 #------------------------------------
+echo "添加 Systemd OOM 优化..."
+mkdir -p /etc/systemd/system/danted.service.d
 cat > /etc/systemd/system/danted.service.d/override.conf <<EOF
 [Service]
-# 限制最大可用内存 256M (可根据需要修改或干脆注释掉)
-# MemoryMax=256M
-
 # 调整 OOM 优先级，值越负越不容易被杀，默认为0
 OOMScoreAdjust=-800
 EOF
@@ -197,14 +216,14 @@ EOF
 systemctl daemon-reload
 
 #------------------------------------
-# 9. 启动并设置开机自启 Dante 服务
+# 10. 启动并设置开机自启 Dante 服务
 #------------------------------------
 echo "注册并启动 SOCKS5 守护进程..."
 systemctl enable danted
 systemctl restart danted
 
 #--------------------------------
-# 10. 验证服务状态并输出结果
+# 11. 验证服务状态并输出结果
 #--------------------------------
 if systemctl status danted | grep -q "active (running)"; then
   echo "SOCKS5 代理服务已启动！"
