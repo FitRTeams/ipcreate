@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #============================================================
-#     Dante SOCKS5 一键安装/配置脚本 - 2G Swap 优先使用版
+#     Dante SOCKS5 一键安装/配置脚本 - 自动检测公网 IP 版
 #============================================================
 
 echo "=============================="
@@ -17,21 +17,15 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 #-------------------------------
-# 1. 询问/自动检测服务器公网 IP
+# 1. 自动检测服务器公网 IP
 #-------------------------------
-read -p "请输入要绑定的公网 IP 地址 (回车跳过自动检测): " PUBLIC_IP
-
+echo "尝试自动检测公网 IP ..."
+PUBLIC_IP=$(curl -s ifconfig.me)
 if [ -z "$PUBLIC_IP" ]; then
-  echo "尝试自动检测公网 IP ..."
-  PUBLIC_IP=$(curl -s ifconfig.me)
-  if [ -z "$PUBLIC_IP" ]; then
-    echo "错误：自动检测公网 IP 失败，请手动输入 IP 后重新运行脚本！"
-    exit 1
-  else
-    echo "自动检测到的公网 IP 为: $PUBLIC_IP"
-  fi
+  echo "错误：自动检测公网 IP 失败，请检查网络连接后重试！"
+  exit 1
 else
-  echo "已使用手动输入的公网 IP: $PUBLIC_IP"
+  echo "自动检测到的公网 IP 为: $PUBLIC_IP"
 fi
 
 #-------------------------
@@ -143,39 +137,18 @@ else
 fi
 
 #--------------------------------
-# 7. 可选：尝试绑定公网 IP
+# 7. 配置 Dante SOCKS5 服务
 #--------------------------------
-NETCARD="eth0"
-if ip link show "$NETCARD" &>/dev/null; then
-  echo "检测到默认网卡: $NETCARD，尝试检查 IP 绑定..."
-  if ip addr show "$NETCARD" | grep -q "$PUBLIC_IP"; then
-    echo "公网 IP $PUBLIC_IP 已绑定到网卡 $NETCARD，无需重复绑定。"
-  else
-    echo "绑定公网 IP 到网卡 $NETCARD..."
-    ip addr add $PUBLIC_IP/32 dev $NETCARD
-    if [ $? -eq 0 ]; then
-      echo "公网 IP $PUBLIC_IP 绑定成功。"
-    else
-      echo "绑定公网 IP 失败，请检查输入的 IP 地址或网卡名称是否正确！"
-    fi
-  fi
-else
-  echo "未检测到网卡 $NETCARD，可能 VPS 不是此网卡或已自动分配 IP。跳过手动绑定..."
-fi
-
-#---------------------------
-# 8. 配置 Dante SOCKS5 服务
-#---------------------------
 echo "配置 SOCKS5 服务..."
 cat > /etc/danted.conf <<EOF
 # 关闭日志输出到文件，可改为 /var/log/danted.log 或 syslog
 logoutput: /dev/null
 
-# 监听公网 IP 和端口
+# 监听所有地址 0.0.0.0 并使用 1080 端口
 internal: 0.0.0.0 port = 1080
-external: $NETCARD
+external: $(ip route get 8.8.8.8 | awk '{print $5; exit}')
 
-# 无需认证
+# 用户认证方式
 method: none
 
 # 用户权限
@@ -202,8 +175,7 @@ EOF
 echo "SOCKS5 配置完成。"
 
 #------------------------------------
-# 9. Systemd OOM 优化：调整优先级
-#    让 danted 更不容易被 OOM 杀死
+# 8. Systemd OOM 优化：调整优先级
 #------------------------------------
 echo "添加 Systemd OOM 优化..."
 mkdir -p /etc/systemd/system/danted.service.d
@@ -216,14 +188,14 @@ EOF
 systemctl daemon-reload
 
 #------------------------------------
-# 10. 启动并设置开机自启 Dante 服务
+# 9. 启动并设置开机自启 Dante 服务
 #------------------------------------
 echo "注册并启动 SOCKS5 守护进程..."
 systemctl enable danted
 systemctl restart danted
 
 #--------------------------------
-# 11. 验证服务状态并输出结果
+# 10. 验证服务状态并输出结果
 #--------------------------------
 if systemctl status danted | grep -q "active (running)"; then
   echo "SOCKS5 代理服务已启动！"
