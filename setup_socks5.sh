@@ -22,6 +22,7 @@ apt-get install -y ufw wget
 # === 3. 删除现有的 /usr/local/3proxy 目录（如果存在） ===
 echo "删除现有的 /usr/local/3proxy 目录（如果存在）..."
 if [ -d "/usr/local/3proxy" ]; then
+    systemctl stop 3proxy || true
     rm -rf /usr/local/3proxy
     echo "已删除现有的 /usr/local/3proxy 目录。"
 fi
@@ -34,13 +35,19 @@ mkdir -p /usr/local/3proxy/log
 
 # === 5. 下载并解压 3proxy 二进制包 ===
 echo "下载并解压 3proxy 二进制包..."
-# 替换下面的 URL 为您上传的 3proxy_bin.tar.gz 的实际下载链接
+# 替换下面的 URL 为您上传的 3proxy_package.tar.gz 的实际下载链接
 DOWNLOAD_URL="https://github.com/FitRTeams/ipcreate/raw/main/3proxy_package.tar.gz"
 
-wget -O /tmp/3proxy_bin.tar.gz "$DOWNLOAD_URL"
+wget -O /tmp/3proxy_package.tar.gz "$DOWNLOAD_URL"
+
+# 检查下载是否成功
+if [ ! -f "/tmp/3proxy_package.tar.gz" ]; then
+    echo "错误: 下载 3proxy_package.tar.gz 失败。请检查 DOWNLOAD_URL 是否正确。"
+    exit 1
+fi
 
 # 解压 bin/3proxy 到 /usr/local/3proxy/bin
-tar xzvf /tmp/3proxy_bin.tar.gz -C /usr/local/3proxy/bin --strip-components=1 bin/3proxy
+tar xzvf /tmp/3proxy_package.tar.gz -C /usr/local/3proxy/bin --strip-components=1 bin/3proxy
 
 # 确保 3proxy 可执行文件存在
 if [ ! -f "/usr/local/3proxy/bin/3proxy" ]; then
@@ -51,12 +58,14 @@ fi
 # === 6. 创建配置文件 ===
 echo "创建 3proxy 配置文件..."
 cat <<EOF > /usr/local/3proxy/etc/3proxy.cfg
-nscache 65536
+nscache 32768
 
-log /dev/null D
+log /usr/local/3proxy/log/3proxy.log D
 maxconn 32
 
 socks -p1080
+
+daemon
 EOF
 
 # === 7. 设置执行权限 ===
@@ -75,6 +84,9 @@ Type=simple
 ExecStart=/usr/local/3proxy/bin/3proxy /usr/local/3proxy/etc/3proxy.cfg
 Restart=always
 RestartSec=5
+LimitNOFILE=65535
+MemoryMax=100M
+OOMScoreAdjust=-1000
 
 [Install]
 WantedBy=multi-user.target
@@ -116,5 +128,26 @@ systemctl restart 3proxy
 echo "清理系统..."
 apt-get autoremove -y
 apt-get clean
+
+# === 13. 创建并启用 Swap 文件 ===
+echo "创建并启用 Swap 文件..."
+SWAPFILE=/swapfile
+if [ ! -f "$SWAPFILE" ]; then
+    fallocate -l 1G $SWAPFILE
+    chmod 600 $SWAPFILE
+    mkswap $SWAPFILE
+    swapon $SWAPFILE
+    echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+    echo "Swap 文件已创建并启用。"
+else
+    echo "Swap 文件已存在。"
+fi
+
+# === 14. 禁用不必要的系统服务 ===
+echo "禁用不必要的系统服务以节省内存..."
+systemctl disable --now apport.service || true
+systemctl disable --now bluetooth.service || true
+# 根据需要添加更多服务
+echo "已禁用不必要的系统服务。"
 
 echo "3proxy SOCKS5 代理已成功安装并运行在端口 1080。"
