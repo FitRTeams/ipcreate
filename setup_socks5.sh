@@ -1,214 +1,158 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# Author: Your Name
+# Description: 批量部署 3proxy SOCKS5 代理，配置系统优化
+# Version: 1.2
 
-#-------------------------
-# 0. 开始信息 & root 检查
-#-------------------------
-echo "=============================="
-echo "开始配置 SOCKS5 代理服务..."
-echo "=============================="
+set -e
 
+# === 1. 检查是否以 root 用户运行 ===
 if [ "$(id -u)" -ne 0 ]; then
-  echo "请使用 root 用户运行此脚本！"
-  exit 1
-fi
-
-#---------------------------------
-# 1. 自动检测服务器公网 IP
-#---------------------------------
-echo "尝试自动检测公网 IP ..."
-PUBLIC_IP=$(curl -s ifconfig.me)
-if [ -z "$PUBLIC_IP" ]; then
-  echo "错误：自动检测公网 IP 失败，请检查网络连接后重试！"
-  exit 1
-else
-  echo "检测到的公网 IP: $PUBLIC_IP"
-fi
-
-#-------------------------
-# 2. 检查并终止已有 Dante
-#-------------------------
-echo "检查是否存在正在运行的 danted 进程..."
-if pgrep -x "danted" > /dev/null; then
-  echo "发现运行中的 danted 进程，正在终止..."
-  systemctl stop danted
-  pkill -9 danted
-  echo "已终止所有 danted 相关进程。"
-else
-  echo "未发现运行中的 danted 进程。"
-fi
-
-#---------------------------
-# 3. 修复 dpkg/apt 锁问题
-#---------------------------
-echo "检查是否有占用锁的进程..."
-LOCKED_PROCESSES=$(ps aux | grep -E "apt|dpkg" | grep -v grep)
-if [ -n "$LOCKED_PROCESSES" ]; then
-  echo "发现以下占用锁的进程，正在清理..."
-  echo "$LOCKED_PROCESSES" | awk '{print $2}' | xargs kill -9
-fi
-
-echo "删除锁文件..."
-rm -f /var/lib/dpkg/lock
-rm -f /var/lib/dpkg/lock-frontend
-rm -f /var/cache/apt/archives/lock
-
-echo "修复 dpkg..."
-dpkg --configure -a
-if [ $? -ne 0 ]; then
-  echo "dpkg 修复失败，请手动检查！"
-  exit 1
-fi
-
-#---------------------------
-# 4. 更新系统/安装软件包
-#---------------------------
-echo "更新软件包列表..."
-apt-get update -qq
-if [ $? -ne 0 ]; then
-  echo "更新软件包列表失败，请检查网络！"
-  exit 1
-fi
-
-echo "安装必要的软件包..."
-apt-get install -y -qq dante-server curl
-if [ $? -ne 0 ]; then
-  echo "软件安装失败，请检查网络或源配置！"
-  exit 1
-fi
-echo "必要软件安装完成。"
-
-#--------------------------------
-# 5. 如果需要，将公网 IP 绑定到网卡
-#   (适用于真实独立服务器/静态IP场景)
-#--------------------------------
-echo "检查公网 IP 是否已绑定到网卡 eth0..."
-if ip addr show eth0 | grep -q "$PUBLIC_IP"; then
-  echo "公网 IP $PUBLIC_IP 已绑定到网卡 eth0，无需重复绑定。"
-else
-  echo "绑定公网 IP $PUBLIC_IP 到网卡 eth0..."
-  ip addr add $PUBLIC_IP/32 dev eth0
-  if [ $? -ne 0 ]; then
-    echo "绑定公网 IP 失败，请检查输入的 IP 地址或网络环境！"
+    echo "请使用 root 用户或通过 sudo 运行此脚本。"
     exit 1
-  else
-    echo "公网 IP $PUBLIC_IP 绑定成功。"
-  fi
 fi
 
-#-------------------------
-# 6. 设置 2G Swap
-#-------------------------
-SWAP_SIZE="2G"
+# === 2. 系统更新与升级 ===
+echo "更新系统包列表并升级现有包..."
+apt-get update -y && apt-get upgrade -y
 
-echo "检查并关闭现有 Swap..."
-swapoff -a
+# === 3. 禁用不必要的服务以节省资源 ===
+echo "禁用不必要的服务..."
+# 移除 'ssh' 以保持 SSH 访问
+SERVICES=("apache2" "ufw" "firewalld")  # 根据需要添加或移除服务
+for service in "${SERVICES[@]}"; do
+    if systemctl list-units --full -all | grep -Fq "$service.service"; then
+        systemctl stop "$service" || true
+        systemctl disable "$service" || true
+        echo "已停止并禁用服务: $service"
+    fi
+done
 
-echo "从 /etc/fstab 中移除 Swap 条目..."
-sed -i '/swap/d' /etc/fstab
-
-if [ -f /swapfile ]; then
-  echo "检测到已有 /swapfile，删除之..."
-  rm -f /swapfile
-fi
-
-echo "创建 ${SWAP_SIZE} Swap 文件..."
-fallocate -l $SWAP_SIZE /swapfile
-if [ $? -ne 0 ]; then
-  echo "创建 /swapfile 失败，请检查磁盘空间或权限！"
-  exit 1
-fi
-
-chmod 600 /swapfile
-mkswap /swapfile
-swapon /swapfile
-if [ $? -ne 0 ]; then
-  echo "启用 Swap 失败，请手动检查！"
-  exit 1
-fi
-
-echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
-echo "Swap 启用成功，大小：${SWAP_SIZE}"
-
-#-------------------------
-# 7. 优先使用 Swap
-#-------------------------
-echo "设置 vm.swappiness=100 (更倾向于使用 Swap)..."
-sysctl -w vm.swappiness=100 >/dev/null 2>&1
-if grep -q "vm.swappiness" /etc/sysctl.conf; then
-  sed -i 's/^vm.swappiness=.*/vm.swappiness=100/' /etc/sysctl.conf
+# === 4. 创建并启用临时 Swap ===
+echo "创建并启用临时 Swap 文件以支持编译过程..."
+SWAPFILE="/swapfile_3proxy"
+if [ ! -f "$SWAPFILE" ]; then
+    fallocate -l 512M "$SWAPFILE" || dd if=/dev/zero of="$SWAPFILE" bs=1M count=512
+    chmod 600 "$SWAPFILE"
+    mkswap "$SWAPFILE"
+    swapon "$SWAPFILE"
+    echo "临时 Swap 文件已创建并启用。"
 else
-  echo "vm.swappiness=100" >> /etc/sysctl.conf
+    echo "临时 Swap 文件已存在。"
 fi
 
-#------------------------------------
-# 8. 配置 Dante (SOCKS5) 服务
-#------------------------------------
-echo "配置 SOCKS5 服务..."
-cat > /etc/danted.conf <<EOF
-# 将日志输出到 syslog
-logoutput: syslog
+# === 5. 安装必要的依赖包 ===
+echo "安装必要的依赖包..."
+apt-get install -y git build-essential wget
 
-# 监听:  0.0.0.0:1080 (对外提供代理)
-internal: 0.0.0.0 port = 1080
+# === 6. 下载并编译 3proxy ===
+echo "下载并编译 3proxy..."
+cd /usr/local/src || exit
+if [ ! -d "3proxy" ]; then
+    git clone https://github.com/z3APA3A/3proxy.git
+fi
+cd 3proxy || exit
 
-# 指定对外出口为网卡 eth0
-external: eth0
+make -f Makefile.Linux -j1
 
-# 无需认证
-method: username none
+# === 7. 检查编译结果 ===
+if [ ! -f "bin/3proxy" ]; then
+    echo "编译失败：未找到 bin/3proxy 可执行文件。"
+    echo "移除临时 Swap 文件并退出。"
+    swapoff "$SWAPFILE"
+    rm -f "$SWAPFILE"
+    exit 1
+fi
 
-# 用户权限
-user.privileged: proxy
-user.unprivileged: nobody
+# === 8. 安装 3proxy ===
+echo "安装 3proxy..."
+mkdir -p /usr/local/3proxy/bin
+mkdir -p /usr/local/3proxy/log
+mkdir -p /usr/local/3proxy/etc
 
-# 客户端连接规则
-client pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect
-}
+cp bin/3proxy /usr/local/3proxy/bin/
+chmod +x /usr/local/3proxy/bin/3proxy
 
-# SOCKS 服务规则
-pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    protocol: tcp udp
-    log: connect disconnect
-}
+# === 9. 配置 3proxy ===
+echo "配置 3proxy..."
+cat <<EOF >/usr/local/3proxy/etc/3proxy.cfg
+# 3proxy 配置文件
+
+nscache 65536
+
+# 最小化日志输出
+log /dev/null D
+
+# 最大连接数
+maxconn 32
+
+# 设置 SOCKS5 代理，监听端口 1080
+socks -p1080
 EOF
-echo "SOCKS5 配置完成。"
 
-#------------------------------------
-# 9. Systemd OOM 优化
-#    减少被内存回收机制杀掉几率
-#------------------------------------
-echo "添加 Systemd OOM 优化..."
-mkdir -p /etc/systemd/system/danted.service.d
-cat > /etc/systemd/system/danted.service.d/override.conf <<EOF
+# === 10. 设置 systemd 服务文件 ===
+echo "设置 systemd 服务文件..."
+cat <<EOF >/etc/systemd/system/3proxy.service
+[Unit]
+Description=3proxy SOCKS5 Proxy Server
+After=network.target
+
 [Service]
-OOMScoreAdjust=-800
+Type=simple
+ExecStart=/usr/local/3proxy/bin/3proxy /usr/local/3proxy/etc/3proxy.cfg
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# === 11. 启动并启用 3proxy 服务 ===
+echo "启动并启用 3proxy 服务..."
+systemctl daemon-reload
+systemctl enable 3proxy
+systemctl start 3proxy
+
+# === 12. 移除临时 Swap ===
+echo "移除临时 Swap 文件..."
+swapoff "$SWAPFILE"
+rm -f "$SWAPFILE"
+echo "临时 Swap 文件已移除。"
+
+# === 13. 配置防火墙 ===
+echo "配置防火墙..."
+# 安装 ufw（如果尚未安装）
+apt-get install -y ufw
+
+# 允许 SSH 和 SOCKS5 代理端口
+ufw allow 22/tcp
+ufw allow 1080/tcp
+
+# 设置默认策略
+ufw default deny incoming
+ufw default allow outgoing
+
+# 启用 UFW 防火墙，确保默认拒绝其他入站连接
+echo "y" | ufw enable
+echo "防火墙已配置，允许 SSH (22) 和 SOCKS5 代理 (1080) 端口。"
+
+# === 14. 系统资源优化 ===
+echo "设置 3proxy 的内存限制..."
+mkdir -p /etc/systemd/system/3proxy.service.d
+cat <<EOF >/etc/systemd/system/3proxy.service.d/limit.conf
+[Service]
+# 限制最大内存使用为 100M
+MemoryMax=100M
 EOF
 
 systemctl daemon-reload
+systemctl restart 3proxy
+echo "已设置 3proxy 的内存限制。"
 
-#--------------------------------
-# 10. 启动并设置开机自启 Dante
-#--------------------------------
-echo "注册并启动 SOCKS5 守护进程..."
-systemctl restart danted
-systemctl enable danted
+# === 15. 清理系统 ===
+echo "清理系统..."
+apt-get autoremove -y
+apt-get clean
+echo "系统清理完成。"
 
-#--------------------------------
-# 11. 验证服务状态并输出结果
-#--------------------------------
-if systemctl status danted | grep -q "active (running)"; then
-  echo "SOCKS5 代理服务已启动！"
-  echo "代理地址：socks5://$PUBLIC_IP:1080"
-else
-  echo "SOCKS5 服务启动失败，请检查配置或日志！"
-  echo "最近的错误日志如下："
-  journalctl -u danted | tail -n 10
-  exit 1
-fi
-
-echo "=============================="
-echo "SOCKS5 代理服务配置完成！"
-echo "=============================="
+echo "所有步骤已完成。3proxy SOCKS5 代理运行在端口 1080。"
