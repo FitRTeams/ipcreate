@@ -7,7 +7,7 @@
 # 默认:
 #   - Socks5 监听端口: 1080
 #   - 无需用户名密码 (auth none)
-#   - 二进制程序来源: 你的GitHub上编译好的 3proxy_package.tar.gz
+#   - 二进制程序来源: 你的 3proxy_package.tar.gz (含 bin/3proxy)
 #
 # 使用:
 #   1) chmod +x install_3proxy_noauth.sh
@@ -16,7 +16,8 @@
 
 set -e
 
-# 你在 GitHub 上提供的 tar 包下载地址 (可按需修改)
+# 你在 GitHub 上提供的 tar 包下载地址
+# 注意末尾加 "?raw=true" 保证直接下载
 TARBALL_URL="https://github.com/FitRTeams/ipcreate/blob/main/3proxy_package.tar.gz?raw=true"
 
 echo ">>> [1/6] 安装必要依赖 ..."
@@ -30,17 +31,19 @@ mkdir -p "$TMP_DIR"
 cd "$TMP_DIR"
 
 # 下载并重命名为 3proxy_package.tar.gz
+# --no-check-certificate 如果有证书问题可以加上，但 GitHub 一般不需要
 wget -O 3proxy_package.tar.gz "$TARBALL_URL"
 
-# 安装目录
-INSTALL_DIR="/usr/local/3proxy/bin"
+# 安装目录: /usr/local/3proxy
+INSTALL_DIR="/usr/local/3proxy"
 mkdir -p "$INSTALL_DIR"
 
-# 解压到 /usr/local/3proxy/bin
-tar -xzf 3proxy_package.tar.gz -C "$INSTALL_DIR"
+# 解压:
+#   --strip-components=1 用来去掉压缩包最外层目录，直接把 bin/ 放到 /usr/local/3proxy/bin/
+tar -xzf 3proxy_package.tar.gz -C "$INSTALL_DIR" --strip-components=1
 
-# 确保可执行权限
-chmod +x "$INSTALL_DIR/3proxy"
+# 授予可执行权限给 /usr/local/3proxy/bin/3proxy
+chmod +x "$INSTALL_DIR/bin/3proxy"
 
 echo ">>> [3/6] 创建 3proxy 配置文件: /etc/3proxy/3proxy.cfg (无需密码) ..."
 mkdir -p /etc/3proxy
@@ -74,7 +77,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/3proxy /etc/3proxy/3proxy.cfg
+ExecStart=$INSTALL_DIR/bin/3proxy /etc/3proxy/3proxy.cfg
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 LimitNOFILE=65535
@@ -95,6 +98,7 @@ systemctl status 3proxy --no-pager || true
 echo
 echo ">>> 3proxy 已经安装并启动 (无需密码)。"
 echo "    Socks5 代理: [本机IP]:1080"
+echo "    不需要用户名密码！"
 echo
 echo ">>> 如果要修改端口或其他配置，请编辑 /etc/3proxy/3proxy.cfg 后，再执行:"
 echo "    systemctl restart 3proxy"
