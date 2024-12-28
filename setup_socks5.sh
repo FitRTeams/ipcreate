@@ -59,7 +59,7 @@ cat > /etc/3proxy/3proxy.cfg <<EOF
 # 不使用 daemon/pidfile，让 systemd 能够保持它在前台运行。
 # maxconn 10: 一次最多允许同时建立10个连接。可酌情调整。
 
-maxconn 10
+maxconn 200
 
 # DNS
 nserver 8.8.8.8
