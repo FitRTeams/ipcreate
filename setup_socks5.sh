@@ -1,6 +1,10 @@
 #!/bin/bash
 # 轻量级Socks5部署脚本 (microsocks)
 # 适用于 Ubuntu/Debian 系统
+# 本脚本不依赖传入参数，而自动检测本机IP
+
+# 自动获取本机IP（你也可以使用外部服务，如 curl -s ifconfig.me）
+PUBLIC_IP=$(hostname -I | awk '{print $1}')
 
 # 检查root权限
 if [ "$EUID" -ne 0 ]; then
@@ -18,12 +22,12 @@ DNS_SERVER="8.8.8.8"
 apt-get update -y
 apt-get install -y wget iptables-persistent netfilter-persistent
 
-# 下载静态编译的microsocks（已提前编译好）
+# 下载静态编译的 microsocks（已提前编译好）
 BIN_URL="https://github.com/rofl0r/microsocks/releases/download/v1.1/microsocks-x86_64-linux-musl"
 wget -O /usr/local/bin/microsocks "$BIN_URL"
 chmod +x /usr/local/bin/microsocks
 
-# 创建systemd服务
+# 创建 systemd 服务
 cat > /etc/systemd/system/microsocks.service <<EOF
 [Unit]
 Description=MicroSocks lightweight SOCKS5 server
@@ -65,6 +69,6 @@ systemctl daemon-reload
 systemctl enable microsocks
 systemctl start microsocks
 
-echo "安装完成！SOCKS5地址：$(hostname -I | awk '{print $1}'):$PORT"
+echo "安装完成！SOCKS5地址：$PUBLIC_IP:$PORT"
 echo "用户名: $USERNAME"
 echo "密码: $PASSWORD"
