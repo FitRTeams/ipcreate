@@ -1,61 +1,88 @@
 #!/bin/bash
-# 安装轻量级 SOCKS5 服务——microsocks
+# microsocks 一键部署脚本
+# 适用于 Ubuntu/Debian/CentOS 系统
+#
+# 默认参数（可通过环境变量覆盖）:
+#   PROXY_PORT: 1080
+#   PROXY_LISTEN_IP: 0.0.0.0
+#   DNS1: 8.8.8.8
+#   DNS2: 8.8.4.4
+#
+# 注意：microsocks 不支持用户名/密码认证，如有需求请在网络层面做 IP 限制
 
-# 如果已有旧的 microsocks 文件，则删除
-if [ -f "/usr/local/bin/microsocks" ]; then
-    echo "检测到旧的 microsocks 文件，删除中..."
-    rm -f /usr/local/bin/microsocks
+# 检查是否为 root 用户
+if [ "$EUID" -ne 0 ]; then
+  echo "请以 root 用户运行此脚本." >&2
+  exit 1
 fi
 
-# 根据系统类型安装必要工具（git、gcc、make）
+set -euo pipefail
+
+# 默认变量（允许通过环境变量覆盖）
+PROXY_PORT=${PROXY_PORT:-1080}
+PROXY_LISTEN_IP=${PROXY_LISTEN_IP:-0.0.0.0}
+DNS1=${DNS1:-8.8.8.8}
+DNS2=${DNS2:-8.8.4.4}
+
+echo ">>> 参数设置："
+echo "    代理监听端口: ${PROXY_PORT}"
+echo "    监听 IP:       ${PROXY_LISTEN_IP}"
+echo "    DNS1:          ${DNS1}"
+echo "    DNS2:          ${DNS2}"
+
+echo ">>> 检查并删除旧的 microsocks（如果存在）..."
+if [ -f "/usr/local/bin/microsocks" ]; then
+    rm -f /usr/local/bin/microsocks
+    echo "旧版 microsocks 删除完成。"
+fi
+
+echo ">>> 安装编译依赖（git、gcc、make）..."
 if [ -f /etc/redhat-release ]; then
-    echo "CentOS 系统，更新并安装依赖..."
     yum -y update
     yum -y install git gcc make
 elif [ -f /etc/lsb-release ] || [ -f /etc/debian_version ]; then
-    echo "Debian/Ubuntu 系统，更新并安装依赖..."
-    apt-get update && apt-get install -y git gcc make
+    apt-get update -y
+    apt-get install -y git gcc make
 else
     echo "未知的操作系统，请手动安装 git、gcc、make"
     exit 1
 fi
 
-# 克隆 microsocks 源码，并编译
-if [ -d "/tmp/microsocks" ]; then
-    echo "旧的源码目录存在，删除..."
-    rm -rf /tmp/microsocks
-fi
+echo ">>> 克隆 microsocks 源码..."
+TMP_DIR="/tmp/microsocks_install"
+rm -rf "$TMP_DIR"
+git clone https://github.com/rofl0r/microsocks.git "$TMP_DIR"
 
-echo "克隆 microsocks 源码..."
-git clone https://github.com/rofl0r/microsocks.git /tmp/microsocks
-if [ $? -ne 0 ]; then
-    echo "克隆失败，请检查网络或 GitHub 访问权限"
-    exit 1
-fi
-
-cd /tmp/microsocks
-echo "开始编译 microsocks..."
+cd "$TMP_DIR"
+echo ">>> 开始编译 microsocks..."
 make
 if [ ! -f "microsocks" ]; then
-    echo "编译失败，请检查编译日志"
+    echo "编译失败，请检查编译日志" >&2
     exit 1
 fi
 
-# 将编译好的二进制文件移动到 /usr/local/bin
+echo ">>> 安装 microsocks 到 /usr/local/bin ..."
 mv microsocks /usr/local/bin/microsocks
 chmod +x /usr/local/bin/microsocks
 
-# 配置 DNS（添加常用的 8.8.8.8，如果没有的话）
-if ! grep -q "8.8.8.8" /etc/resolv.conf; then
-    echo "配置 DNS 为 8.8.8.8"
-    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+echo ">>> 配置系统 DNS (追加 ${DNS1} 与 ${DNS2} 至 /etc/resolv.conf, 如不存在)..."
+if ! grep -q "${DNS1}" /etc/resolv.conf; then
+    echo "nameserver ${DNS1}" >> /etc/resolv.conf
+fi
+if ! grep -q "${DNS2}" /etc/resolv.conf; then
+    echo "nameserver ${DNS2}" >> /etc/resolv.conf
 fi
 
-# 启动 microsocks
-# 参数说明：
-#   -p : 指定监听端口，这里使用 1080
-#   -d : 以后台方式运行
-# 如果你需要指定监听地址（例如 0.0.0.0），可以自行调整启动命令
-nohup /usr/local/bin/microsocks -p 1080 -d > /var/log/microsocks.log 2>&1 &
+echo ">>> 启动 microsocks 进程（后台运行）..."
+nohup /usr/local/bin/microsocks -p ${PROXY_PORT} -i ${PROXY_LISTEN_IP} -d > /var/log/microsocks.log 2>&1 &
 
-echo "microsocks 已启动，监听 1080 端口"
+echo "------------------------------------------"
+echo "microsocks 已启动，监听端口 ${PROXY_PORT}"
+echo "（注：microsocks 不支持认证，建议通过防火墙限制访问）"
+echo "查看日志: tail -f /var/log/microsocks.log"
+echo "------------------------------------------"
+
+# 清理临时目录
+rm -rf "$TMP_DIR"
+
+exit 0
