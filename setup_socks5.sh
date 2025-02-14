@@ -3,12 +3,12 @@
 # 适用于 Ubuntu/Debian 系统
 # 自动获取本机IP，不依赖传入参数
 
-# 自动获取本机IP（如果服务器有多个网卡，建议使用外部服务获取公网IP，如 curl -s ifconfig.me）
-PUBLIC_IP=$(hostname -I | awk '{print $1}')
-# 或者使用下面方式：
+# 自动获取本机IP
+# 如果服务器有多个网卡或返回的是内网IP，可以考虑使用：
 # PUBLIC_IP=$(curl -s ifconfig.me)
+PUBLIC_IP=$(hostname -I | awk '{print $1}')
 
-# 检查root权限
+# 检查 root 权限
 if [ "$EUID" -ne 0 ]; then
   echo "请使用 root 权限运行此脚本" >&2
   exit 1
