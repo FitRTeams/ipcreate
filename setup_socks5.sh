@@ -1,10 +1,12 @@
 #!/bin/bash
 # 轻量级Socks5部署脚本 (microsocks)
 # 适用于 Ubuntu/Debian 系统
-# 本脚本不依赖传入参数，而自动检测本机IP
+# 自动获取本机IP，不依赖传入参数
 
-# 自动获取本机IP（你也可以使用外部服务，如 curl -s ifconfig.me）
+# 自动获取本机IP（如果服务器有多个网卡，建议使用外部服务获取公网IP，如 curl -s ifconfig.me）
 PUBLIC_IP=$(hostname -I | awk '{print $1}')
+# 或者使用下面方式：
+# PUBLIC_IP=$(curl -s ifconfig.me)
 
 # 检查root权限
 if [ "$EUID" -ne 0 ]; then
