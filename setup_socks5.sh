@@ -1,76 +1,61 @@
 #!/bin/bash
-# 轻量级Socks5部署脚本 (microsocks)
-# 适用于 Ubuntu/Debian 系统
-# 自动获取本机IP，不依赖传入参数
+# 安装轻量级 SOCKS5 服务——microsocks
 
-# 自动获取本机IP
-# 如果服务器有多个网卡或返回的是内网IP，可以考虑使用：
-# PUBLIC_IP=$(curl -s ifconfig.me)
-PUBLIC_IP=$(hostname -I | awk '{print $1}')
-
-# 检查 root 权限
-if [ "$EUID" -ne 0 ]; then
-  echo "请使用 root 权限运行此脚本" >&2
-  exit 1
+# 如果已有旧的 microsocks 文件，则删除
+if [ -f "/usr/local/bin/microsocks" ]; then
+    echo "检测到旧的 microsocks 文件，删除中..."
+    rm -f /usr/local/bin/microsocks
 fi
 
-# 配置参数
-PORT=1080
-USERNAME="web3happy"
-PASSWORD="Hua123456**"
-DNS_SERVER="8.8.8.8"
+# 根据系统类型安装必要工具（git、gcc、make）
+if [ -f /etc/redhat-release ]; then
+    echo "CentOS 系统，更新并安装依赖..."
+    yum -y update
+    yum -y install git gcc make
+elif [ -f /etc/lsb-release ] || [ -f /etc/debian_version ]; then
+    echo "Debian/Ubuntu 系统，更新并安装依赖..."
+    apt-get update && apt-get install -y git gcc make
+else
+    echo "未知的操作系统，请手动安装 git、gcc、make"
+    exit 1
+fi
 
-# 安装基础依赖
-apt-get update -y
-apt-get install -y wget iptables-persistent netfilter-persistent
+# 克隆 microsocks 源码，并编译
+if [ -d "/tmp/microsocks" ]; then
+    echo "旧的源码目录存在，删除..."
+    rm -rf /tmp/microsocks
+fi
 
-# 下载静态编译的 microsocks（已提前编译好）
-BIN_URL="https://github.com/rofl0r/microsocks/releases/download/v1.1/microsocks-x86_64-linux-musl"
-wget -O /usr/local/bin/microsocks "$BIN_URL"
+echo "克隆 microsocks 源码..."
+git clone https://github.com/rofl0r/microsocks.git /tmp/microsocks
+if [ $? -ne 0 ]; then
+    echo "克隆失败，请检查网络或 GitHub 访问权限"
+    exit 1
+fi
+
+cd /tmp/microsocks
+echo "开始编译 microsocks..."
+make
+if [ ! -f "microsocks" ]; then
+    echo "编译失败，请检查编译日志"
+    exit 1
+fi
+
+# 将编译好的二进制文件移动到 /usr/local/bin
+mv microsocks /usr/local/bin/microsocks
 chmod +x /usr/local/bin/microsocks
 
-# 创建 systemd 服务
-cat > /etc/systemd/system/microsocks.service <<EOF
-[Unit]
-Description=MicroSocks lightweight SOCKS5 server
-After=network.target
+# 配置 DNS（添加常用的 8.8.8.8，如果没有的话）
+if ! grep -q "8.8.8.8" /etc/resolv.conf; then
+    echo "配置 DNS 为 8.8.8.8"
+    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+fi
 
-[Service]
-Type=simple
-User=nobody
-ExecStart=/usr/local/bin/microsocks -1 -u "$USERNAME" -P "$PASSWORD" -p $PORT
-Restart=always
-RestartSec=5
-LimitNOFILE=65536
-Environment="DNS_RESOLVER=$DNS_SERVER"
+# 启动 microsocks
+# 参数说明：
+#   -p : 指定监听端口，这里使用 1080
+#   -d : 以后台方式运行
+# 如果你需要指定监听地址（例如 0.0.0.0），可以自行调整启动命令
+nohup /usr/local/bin/microsocks -p 1080 -d > /var/log/microsocks.log 2>&1 &
 
-# 安全加固
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=full
-ProtectHome=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# 优化系统配置
-echo "net.core.rmem_max=16777216" >> /etc/sysctl.conf
-echo "net.core.wmem_max=16777216" >> /etc/sysctl.conf
-sysctl -p
-
-# 防火墙设置（仅允许必要端口）
-iptables -F
-iptables -A INPUT -p tcp --dport $PORT -j ACCEPT
-iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-iptables -A INPUT -j DROP
-netfilter-persistent save
-
-# 启动服务
-systemctl daemon-reload
-systemctl enable microsocks
-systemctl start microsocks
-
-echo "安装完成！SOCKS5地址：$PUBLIC_IP:$PORT"
-echo "用户名: $USERNAME"
-echo "密码: $PASSWORD"
+echo "microsocks 已启动，监听 1080 端口"
