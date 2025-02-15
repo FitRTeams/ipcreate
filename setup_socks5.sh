@@ -1,36 +1,43 @@
 #!/bin/bash
 set -e
 
-# 安装编译依赖
-apt-get update && apt-get install -y gcc make
+# 判断系统使用的包管理器，并安装依赖
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update && apt-get install -y build-essential git wget
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y gcc make git wget
+else
+  echo "不支持当前包管理器，请手动安装 gcc/make/git/wget。"
+  exit 1
+fi
 
-# 编译安装microsocks
-wget https://github.com/rofl0r/microsocks/archive/refs/tags/v1.1.1.tar.gz
-tar xzf v1.1.1.tar.gz
-cd microsocks-1.1.1
-make && mv microsocks /usr/local/bin/
+# 下载并编译 microsocks
+if [ ! -d "microsocks" ]; then
+  git clone https://github.com/rofl0r/microsocks.git
+fi
+cd microsocks
+make
+cp microsocks /usr/local/bin/
+cd ..
 
-# 创建系统服务
-cat > /etc/systemd/system/microsocks.service <<EOF
+# 创建 systemd 服务配置文件（需要 root 权限）
+cat <<'EOF' > /etc/systemd/system/microsocks.service
 [Unit]
-Description=MicroSocks SOCKS5 Server
+Description=Microsocks lightweight SOCKS5 proxy
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/microsocks -p 1080
+ExecStart=/usr/local/bin/microsocks -p 1080 -b 0.0.0.0
 Restart=always
-User=nobody
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 启动服务
+# 重新加载 systemd 配置并启动服务
 systemctl daemon-reload
-systemctl enable --now microsocks
+systemctl enable microsocks
+systemctl start microsocks
 
-# 防火墙设置（如果启用）
-if command -v ufw &> /dev/null; then
-    ufw allow 1080/tcp
-    ufw reload
-fi
+echo "Microsocks SOCKS5 服务已部署并在 1080 端口运行。"
