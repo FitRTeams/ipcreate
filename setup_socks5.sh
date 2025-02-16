@@ -20,7 +20,11 @@ make
 cp microsocks /usr/local/bin/
 cd ..
 
-# 创建 systemd 服务配置文件（需要 root 权限）
+# 配置 DNS 以改善谷歌访问问题（可能需要根据具体情况调整）
+echo "nameserver 1.1.1.1" > /etc/resolv.conf
+echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+
+# 创建 systemd 服务文件，保证服务自启动并保持运行
 cat <<'EOF' > /etc/systemd/system/microsocks.service
 [Unit]
 Description=Microsocks lightweight SOCKS5 proxy
@@ -35,9 +39,8 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
 
-# 重新加载 systemd 配置并启动服务
 systemctl daemon-reload
 systemctl enable microsocks
-systemctl start microsocks
+systemctl restart microsocks
 
 echo "Microsocks SOCKS5 服务已部署并在 1080 端口运行。"
