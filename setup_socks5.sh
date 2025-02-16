@@ -20,9 +20,11 @@ make
 cp microsocks /usr/local/bin/
 cd ..
 
-# 配置 DNS 以改善谷歌访问问题（可能需要根据具体情况调整）
-echo "nameserver 1.1.1.1" > /etc/resolv.conf
-echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+# 配置 DNS（设置 Cloudflare 和 Google 的 DNS）以改善谷歌访问问题
+cat <<EOF > /etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
 
 # 创建 systemd 服务文件，保证服务自启动并保持运行
 cat <<'EOF' > /etc/systemd/system/microsocks.service
