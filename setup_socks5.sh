@@ -1,48 +1,54 @@
 #!/bin/bash
+#
+# 安装并配置 microsocks 的脚本
+# 建议使用 root 用户执行。如果不是 root，请在相关命令前加 sudo。
+
 set -e
 
-# 判断系统使用的包管理器，并安装依赖
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get update && apt-get install -y build-essential git wget
-elif command -v yum >/dev/null 2>&1; then
-  yum install -y gcc make git wget
-else
-  echo "不支持当前包管理器，请手动安装 gcc/make/git/wget。"
-  exit 1
-fi
+echo "开始安装 microsocks..."
 
-# 下载并编译 microsocks
-if [ ! -d "microsocks" ]; then
-  git clone https://github.com/rofl0r/microsocks.git
-fi
+# 1. 更新软件源并安装必要依赖
+apt-get update -y
+apt-get install -y git build-essential
+
+# 2. 下载并编译 microsocks
+[ -d /tmp/microsocks ] && rm -rf /tmp/microsocks
+cd /tmp
+git clone https://github.com/rofl0r/microsocks.git
 cd microsocks
 make
-cp microsocks /usr/local/bin/
-cd ..
 
-# 配置 DNS（设置 Cloudflare 和 Google 的 DNS）以改善谷歌访问问题
-cat <<EOF > /etc/resolv.conf
-nameserver 1.1.1.1
-nameserver 8.8.8.8
-EOF
+# 3. 安装编译好的可执行文件到 /usr/local/bin
+cp microsocks /usr/local/bin/microsocks
 
-# 创建 systemd 服务文件，保证服务自启动并保持运行
-cat <<'EOF' > /etc/systemd/system/microsocks.service
+# 4. 创建 systemd 服务文件，以便开机自启动
+cat <<EOF >/etc/systemd/system/microsocks.service
 [Unit]
-Description=Microsocks lightweight SOCKS5 proxy
-After=network.target
+Description=Microsocks - tiny, lightweight SOCKS5 server
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/microsocks -p 1080 -b 0.0.0.0
+ExecStart=/usr/local/bin/microsocks -p 1080
 Restart=always
-RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+# 5. 启用并启动 microsocks
 systemctl daemon-reload
 systemctl enable microsocks
 systemctl restart microsocks
 
-echo "Microsocks SOCKS5 服务已部署并在 1080 端口运行。"
+# 6. 备份并修改 DNS（写入 8.8.8.8、8.8.4.4）
+if [ -f /etc/resolv.conf ]; then
+  cp /etc/resolv.conf /etc/resolv.conf.bak.$(date +%F-%H-%M-%S)
+fi
+
+cat <<DNSCONF >/etc/resolv.conf
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+DNSCONF
+
+echo "microsocks 安装与配置完成。"
